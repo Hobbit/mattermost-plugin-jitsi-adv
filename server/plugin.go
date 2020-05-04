@@ -38,14 +38,14 @@ func (p *Plugin) OnActivate() error {
 		return err
 	}
     
-    if err := p.API.RegisterCommand(&model.Command{
-        Trigger:            COMMAND_TRIGGER,
-        AutoComplete:       true,
-        AutoCompleteHint:   "[roomname]",
-        AutoCompleteDesc:   "Create a Jitsi Meeting",
-    }); err != nil {
-        return errors.Wrapf(err, "failed to register %s command", COMMAND_TRIGGER)
-    }
+	if err := p.API.RegisterCommand(&model.Command{
+		Trigger:            COMMAND_TRIGGER,
+		AutoComplete:       true,
+		AutoCompleteHint:   "[roomname]",
+		AutoCompleteDesc:   "Create a Jitsi Meeting",
+	}); err != nil {
+		return errors.Wrapf(err, "failed to register %s command", COMMAND_TRIGGER)
+	}
 
 	return nil
 }
@@ -133,7 +133,6 @@ func (p *JitsiPlugin) executeCommand(args *model.CommandArgs) *model.CommandResp
 			}},
 		},
 	}
-    
 }
 
 func (p *Plugin) handleStartMeeting(w http.ResponseWriter, r *http.Request) {
