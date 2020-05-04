@@ -18,7 +18,7 @@ import (
 
 const (
 	POST_MEETING_KEY = "post_meeting_"
-    COMMAND_TRIGGER = "jitsi"
+	COMMAND_TRIGGER = "jitsi"
 )
 
 type Plugin struct {
@@ -90,8 +90,8 @@ func (p *JitsiPlugin) ExecuteCommand(c *plugin.Context, args *model.CommandArgs)
 	switch trigger {
 	case commandTrigger:
 		return p.executeCommand(args), nil
-    case "jitsinew":
-        return p.handleStartMeeting(args), nil
+	case "jitsinew":
+		return p.handleStartMeeting(args), nil
 	default:
 		return &model.CommandResponse{
 			ResponseType: model.COMMAND_RESPONSE_TYPE_EPHEMERAL,
