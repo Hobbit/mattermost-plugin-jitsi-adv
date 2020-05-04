@@ -18,6 +18,7 @@ import (
 
 const (
 	POST_MEETING_KEY = "post_meeting_"
+    COMMAND_TRIGGER = "jitsi"
 )
 
 type Plugin struct {
@@ -36,6 +37,15 @@ func (p *Plugin) OnActivate() error {
 	if err := config.IsValid(); err != nil {
 		return err
 	}
+    
+    if err := p.API.RegisterCommand(&model.Command{
+        Trigger:            COMMAND_TRIGGER,
+        AutoComplete:       true,
+        AutoCompleteHint:   "[roomname]",
+        AutoCompleteDesc:   "Create a Jitsi Meeting",
+    }); err != nil {
+        return errors.Wrapf(err, "failed to register %s command", COMMAND_TRIGGER)
+    }
 
 	return nil
 }
@@ -75,6 +85,57 @@ func encodeJitsiMeetingID(meeting string) string {
 	return reg.ReplaceAllString(meeting, "")
 }
 
+func (p *JitsiPlugin) ExecuteCommand(c *plugin.Context, args *model.CommandArgs) (*model.CommandResponse, *model.AppError) {
+	trigger := strings.TrimPrefix(strings.Fields(args.Command)[0], "/")
+	switch trigger {
+	case commandTrigger:
+		return p.executeCommand(args), nil
+    case "jitsinew":
+        return p.handleStartMeeting(args), nil
+	default:
+		return &model.CommandResponse{
+			ResponseType: model.COMMAND_RESPONSE_TYPE_EPHEMERAL,
+			Text:         fmt.Sprintf("Unknown command: " + args.Command),
+		}, nil
+	}
+}
+
+func (p *JitsiPlugin) executeCommand(args *model.CommandArgs) *model.CommandResponse {
+	channel, _ := p.API.GetChannel(args.ChannelId)
+	team, _ := p.API.GetTeam(args.TeamId)
+	user, _ := p.API.GetUser(args.UserId)
+	command := strings.Fields(args.Command)
+	room := fmt.Sprintf("%s_%s", team.Name, channel.Name)
+
+	if len(command) > 1 {
+		room = command[1]
+	}
+
+	config := p.getConfiguration()
+	jitsiURL := strings.TrimSpace(config.JitsiURL)
+	if len(jitsiURL) == 0 {
+		jitsiURL = "https://meet.jit.si"
+	}
+
+	titleLink := fmt.Sprintf("%s/%s", jitsiURL, room)
+	text := fmt.Sprintf("Meeting room created by %s", user.Username)
+
+	return &model.CommandResponse{
+		ResponseType: model.COMMAND_RESPONSE_TYPE_IN_CHANNEL,
+		Props: model.StringInterface{
+			"attachments": []*model.SlackAttachment{{
+				AuthorName: "jitsi",
+				AuthorIcon: "http://is3.mzstatic.com/image/thumb/Purple128/v4/33/0f/99/330f99b7-4e02-4990-ab79-d3440c4237be/source/512x512bb.jpg",
+				Title:      fmt.Sprintf("Click here to join the meeting: %s.", room),
+				TitleLink:  titleLink,
+				Text:       text,
+				Color:      "#ff0000",
+			}},
+		},
+	}
+    
+}
+
 func (p *Plugin) handleStartMeeting(w http.ResponseWriter, r *http.Request) {
 	if err := p.getConfiguration().IsValid(); err != nil {
 		http.Error(w, err.Error(), http.StatusTeapot)
@@ -101,7 +162,7 @@ func (p *Plugin) handleStartMeeting(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), err.StatusCode)
 	}
 
-	if _, err := p.API.GetChannelMember(req.ChannelId, user.Id); err != nil {
+	if _, err = p.API.GetChannelMember(req.ChannelId, user.Id); err != nil {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
@@ -167,7 +228,7 @@ func (p *Plugin) handleStartMeeting(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	if _, err := p.API.CreatePost(post); err != nil {
+	if _, err = p.API.CreatePost(post); err != nil {
 		http.Error(w, err.Error(), err.StatusCode)
 		return
 	}
