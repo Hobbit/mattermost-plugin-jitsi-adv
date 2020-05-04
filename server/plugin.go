@@ -39,10 +39,10 @@ func (p *Plugin) OnActivate() error {
 	}
     
 	if err := p.API.RegisterCommand(&model.Command{
-		Trigger:            COMMAND_TRIGGER,
-		AutoComplete:       true,
-		AutoCompleteHint:   "[roomname]",
-		AutoCompleteDesc:   "Create a Jitsi Meeting",
+		Trigger:			COMMAND_TRIGGER,
+		AutoComplete:		true,
+		AutoCompleteHint:	"[roomname]",
+		AutoCompleteDesc:	"Create a Jitsi Meeting",
 	}); err != nil {
 		return errors.Wrapf(err, "failed to register %s command", COMMAND_TRIGGER)
 	}
