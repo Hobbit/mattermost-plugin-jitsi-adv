@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/cristalhq/jwt"
-	"github.com/mattermost/mattermost-server/model"
-	"github.com/mattermost/mattermost-server/plugin"
+	"github.com/mattermost/mattermost-server/v5/model"
+	"github.com/mattermost/mattermost-server/v5/plugin"
 	"github.com/pkg/errors"
 )
 
@@ -23,7 +23,6 @@ const (
 
 type Plugin struct {
 	plugin.MattermostPlugin
-
 	// configurationLock synchronizes access to the configuration.
 	configurationLock sync.RWMutex
 
@@ -116,6 +115,11 @@ func (p *Plugin) executeCommand(args *model.CommandArgs) *model.CommandResponse 
 		jitsiURL = "https://meet.jit.si"
 	}
 
+	bundlePath, err := p.API.GetBundlePath()
+	if err != nil {
+		p.API.LogInfo("failed to get bundle path")
+	}
+
 	titleLink := fmt.Sprintf("%s/%s", jitsiURL, room)
 
 	var meetingLinkValidUntil = time.Time{}
@@ -124,6 +128,7 @@ func (p *Plugin) executeCommand(args *model.CommandArgs) *model.CommandResponse 
 		ResponseType: model.COMMAND_RESPONSE_TYPE_IN_CHANNEL,
 		Username:     "Jitsi",
 		ChannelId:    channel.Id,
+		IconURL:      bundlePath + "assets/jitsi_logo.png",
 		Text:         fmt.Sprintf("Meeting started at %s.", titleLink),
 		Type:         "custom_jitsi",
 		Props: map[string]interface{}{
