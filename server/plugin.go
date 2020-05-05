@@ -14,11 +14,11 @@ import (
 	"github.com/cristalhq/jwt"
 	"github.com/mattermost/mattermost-server/model"
 	"github.com/mattermost/mattermost-server/plugin"
+	"github.com/pkg/errors"
 )
 
 const (
 	POST_MEETING_KEY = "post_meeting_"
-	COMMAND_TRIGGER = "jitsi"
 )
 
 type Plugin struct {
@@ -37,14 +37,14 @@ func (p *Plugin) OnActivate() error {
 	if err := config.IsValid(); err != nil {
 		return err
 	}
-    
+
 	if err := p.API.RegisterCommand(&model.Command{
-		Trigger:			COMMAND_TRIGGER,
-		AutoComplete:		true,
-		AutoCompleteHint:	"[roomname]",
-		AutoCompleteDesc:	"Create a Jitsi Meeting",
+		Trigger:          "jitsi",
+		AutoComplete:     true,
+		AutoCompleteHint: "[roomname]",
+		AutoCompleteDesc: "Create a Jitsi Meeting",
 	}); err != nil {
-		return errors.Wrapf(err, "failed to register %s command", COMMAND_TRIGGER)
+		return errors.Wrapf(err, "failed to register %s command", "jitsi")
 	}
 
 	return nil
@@ -85,13 +85,12 @@ func encodeJitsiMeetingID(meeting string) string {
 	return reg.ReplaceAllString(meeting, "")
 }
 
-func (p *JitsiPlugin) ExecuteCommand(c *plugin.Context, args *model.CommandArgs) (*model.CommandResponse, *model.AppError) {
+func (p *Plugin) ExecuteCommand(c *plugin.Context, args *model.CommandArgs) (*model.CommandResponse, *model.AppError) {
 	trigger := strings.TrimPrefix(strings.Fields(args.Command)[0], "/")
 	switch trigger {
-	case commandTrigger:
+	case "jitsi":
 		return p.executeCommand(args), nil
-	case "jitsinew":
-		return p.handleStartMeeting(args), nil
+
 	default:
 		return &model.CommandResponse{
 			ResponseType: model.COMMAND_RESPONSE_TYPE_EPHEMERAL,
@@ -100,10 +99,10 @@ func (p *JitsiPlugin) ExecuteCommand(c *plugin.Context, args *model.CommandArgs)
 	}
 }
 
-func (p *JitsiPlugin) executeCommand(args *model.CommandArgs) *model.CommandResponse {
+func (p *Plugin) executeCommand(args *model.CommandArgs) *model.CommandResponse {
 	channel, _ := p.API.GetChannel(args.ChannelId)
 	team, _ := p.API.GetTeam(args.TeamId)
-	user, _ := p.API.GetUser(args.UserId)
+	// user, _ := p.API.GetUser(args.UserId)
 	command := strings.Fields(args.Command)
 	room := fmt.Sprintf("%s_%s", team.Name, channel.Name)
 
@@ -118,19 +117,25 @@ func (p *JitsiPlugin) executeCommand(args *model.CommandArgs) *model.CommandResp
 	}
 
 	titleLink := fmt.Sprintf("%s/%s", jitsiURL, room)
-	text := fmt.Sprintf("Meeting room created by %s", user.Username)
+
+	var meetingLinkValidUntil = time.Time{}
 
 	return &model.CommandResponse{
 		ResponseType: model.COMMAND_RESPONSE_TYPE_IN_CHANNEL,
-		Props: model.StringInterface{
-			"attachments": []*model.SlackAttachment{{
-				AuthorName: "jitsi",
-				AuthorIcon: "http://is3.mzstatic.com/image/thumb/Purple128/v4/33/0f/99/330f99b7-4e02-4990-ab79-d3440c4237be/source/512x512bb.jpg",
-				Title:      fmt.Sprintf("Click here to join the meeting: %s.", room),
-				TitleLink:  titleLink,
-				Text:       text,
-				Color:      "#ff0000",
-			}},
+		Username:     "Jitsi",
+		ChannelId:    channel.Id,
+		Text:         fmt.Sprintf("Meeting started at %s.", titleLink),
+		Type:         "custom_jitsi",
+		Props: map[string]interface{}{
+			"meeting_id":              room,
+			"meeting_link":            titleLink,
+			"jwt_meeting":             false,
+			"jwt_meeting_valid_until": meetingLinkValidUntil.Format("2006-01-02 15:04:05 Z07:00"),
+			"meeting_personal":        false,
+			"meeting_topic":           "test topic",
+			"from_webhook":            "true",
+			"override_username":       "Jitsi",
+			"override_icon_url":       "https://s3.amazonaws.com/mattermost-plugin-media/Zoom+App.png",
 		},
 	}
 }
