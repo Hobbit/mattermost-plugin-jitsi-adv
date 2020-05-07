@@ -3,9 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -18,11 +20,19 @@ import (
 )
 
 const (
-	POST_MEETING_KEY = "post_meeting_"
+	postMeetingKey = "post_meeting_"
+	commandTrigger = "jitsi"
+
+	botName        = "Jitsi"
+	botDescription = "Created by the Jitsi Meet plugin."
 )
 
 type Plugin struct {
 	plugin.MattermostPlugin
+
+	// botUserID of the created bot account.
+	botUserID string
+
 	// configurationLock synchronizes access to the configuration.
 	configurationLock sync.RWMutex
 
@@ -37,8 +47,43 @@ func (p *Plugin) OnActivate() error {
 		return err
 	}
 
+	botUserID, err := p.Helpers.EnsureBot(&model.Bot{
+		Username:    botName,
+		DisplayName: botName,
+		Description: botDescription,
+	})
+	if err != nil {
+		return errors.Wrap(err, "failed to ensure bot account")
+	}
+	p.botUserID = botUserID
+
+	bundlePath, err := p.API.GetBundlePath()
+	if err != nil {
+		return errors.Wrap(err, "couldn't get bundle path")
+	}
+
+	botProfileImage, err := ioutil.ReadFile(filepath.Join(bundlePath, "public", "jitsi_logo.png"))
+	if err != nil {
+		return errors.Wrap(err, "couldn't read profile image")
+	}
+
+	if appErr := p.API.SetProfileImage(botUserID, botProfileImage); appErr != nil {
+		return errors.Wrap(appErr, "couldn't set profile image")
+	}
+
+	botIconImage, err := ioutil.ReadFile(filepath.Join(bundlePath, "assets", "jitsi_logo.svg"))
+	if err != nil {
+		return errors.Wrap(err, "couldn't read profile image")
+	}
+
+	if appErr := p.API.SetBotIconImage(botUserID, botIconImage); appErr != nil {
+		return errors.Wrap(appErr, "couldn't set icon image")
+	}
+
 	if err := p.API.RegisterCommand(&model.Command{
-		Trigger:          "jitsi",
+		Trigger:          commandTrigger,
+		DisplayName:      botName,
+		Description:      "Jitsi Meet slash command integration.",
 		AutoComplete:     true,
 		AutoCompleteHint: "[roomname]",
 		AutoCompleteDesc: "Create a Jitsi Meeting",
@@ -84,11 +129,22 @@ func encodeJitsiMeetingID(meeting string) string {
 	return reg.ReplaceAllString(meeting, "")
 }
 
+func (p *Plugin) generateMeetingID(topic string) string {
+	var meetingID string
+	if len(topic) < 1 {
+		meetingID = generateRoomWithoutSeparator()
+	} else {
+		meetingID = encodeJitsiMeetingID(topic)
+	}
+
+	return meetingID
+}
+
 func (p *Plugin) ExecuteCommand(c *plugin.Context, args *model.CommandArgs) (*model.CommandResponse, *model.AppError) {
 	trigger := strings.TrimPrefix(strings.Fields(args.Command)[0], "/")
 	switch trigger {
-	case "jitsi":
-		return p.executeCommand(args), nil
+	case commandTrigger:
+		return p.startMeetingCommand(args), nil
 
 	default:
 		return &model.CommandResponse{
@@ -98,51 +154,18 @@ func (p *Plugin) ExecuteCommand(c *plugin.Context, args *model.CommandArgs) (*mo
 	}
 }
 
-func (p *Plugin) executeCommand(args *model.CommandArgs) *model.CommandResponse {
+func (p *Plugin) startMeetingCommand(args *model.CommandArgs) *model.CommandResponse {
 	channel, _ := p.API.GetChannel(args.ChannelId)
 	team, _ := p.API.GetTeam(args.TeamId)
-	// user, _ := p.API.GetUser(args.UserId)
-	command := strings.Fields(args.Command)
-	room := fmt.Sprintf("%s_%s", team.Name, channel.Name)
-
-	if len(command) > 1 {
-		room = command[1]
+	topic := fmt.Sprintf("%s_%s", team.Name, channel.Name)
+	if len(strings.Fields(args.Command)) > 1 {
+		topic = strings.Fields(args.Command)[1]
 	}
 
-	config := p.getConfiguration()
-	jitsiURL := strings.TrimSpace(config.JitsiURL)
-	if len(jitsiURL) == 0 {
-		jitsiURL = "https://meet.jit.si"
-	}
+	meetingLinkValidUntil := time.Now().Add(time.Duration(p.getConfiguration().JitsiLinkValidTime) * time.Minute)
 
-	bundlePath, err := p.API.GetBundlePath()
-	if err != nil {
-		p.API.LogInfo("failed to get bundle path")
-	}
-
-	titleLink := fmt.Sprintf("%s/%s", jitsiURL, room)
-
-	var meetingLinkValidUntil = time.Time{}
-
-	return &model.CommandResponse{
-		ResponseType: model.COMMAND_RESPONSE_TYPE_IN_CHANNEL,
-		Username:     "Jitsi",
-		ChannelId:    channel.Id,
-		IconURL:      bundlePath + "assets/jitsi_logo.png",
-		Text:         fmt.Sprintf("Meeting started at %s.", titleLink),
-		Type:         "custom_jitsi",
-		Props: map[string]interface{}{
-			"meeting_id":              room,
-			"meeting_link":            titleLink,
-			"jwt_meeting":             false,
-			"jwt_meeting_valid_until": meetingLinkValidUntil.Format("2006-01-02 15:04:05 Z07:00"),
-			"meeting_personal":        false,
-			"meeting_topic":           "test topic",
-			"from_webhook":            "true",
-			"override_username":       "Jitsi",
-			"override_icon_url":       "https://s3.amazonaws.com/mattermost-plugin-media/Zoom+App.png",
-		},
-	}
+	p.makeJitsiPost(args, p.generateMeetingID(topic), false, meetingLinkValidUntil)
+	return &model.CommandResponse{}
 }
 
 func (p *Plugin) handleStartMeeting(w http.ResponseWriter, r *http.Request) {
@@ -242,11 +265,45 @@ func (p *Plugin) handleStartMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = p.API.KVSet(fmt.Sprintf("%v%v", POST_MEETING_KEY, meetingID), []byte(post.Id))
+	err = p.API.KVSet(fmt.Sprintf("%v%v", postMeetingKey, meetingID), []byte(post.Id))
 	if err != nil {
 		http.Error(w, err.Error(), err.StatusCode)
 		return
 	}
 
 	w.Write([]byte(fmt.Sprintf("%v", meetingID)))
+}
+
+func (p *Plugin) makeJitsiPost(args *model.CommandArgs, meetingID string, JWTMeeting bool, meetingExpiry time.Time) {
+	jitsiURL := strings.TrimRight(strings.TrimSpace(p.getConfiguration().JitsiURL), "/")
+	if len(jitsiURL) == 0 {
+		jitsiURL = "https://meet.jit.si"
+	}
+	meetingURL := jitsiURL + "/" + meetingID
+
+	post := &model.Post{
+		UserId:    p.botUserID,
+		ChannelId: args.ChannelId,
+		Message:   fmt.Sprintf("Meeting started at %s.", meetingURL),
+		Type:      "custom_jitsi",
+		Props: map[string]interface{}{
+			"meeting_id":              meetingID,
+			"meeting_link":            meetingURL,
+			"jwt_meeting":             JWTMeeting,
+			"jwt_meeting_valid_until": meetingExpiry.Format("2006-01-02 15:04:05 Z07:00"),
+			"meeting_personal":        false,
+			"meeting_topic":           "Jitsi Meeting",
+			"from_webhook":            "true",
+			"override_username":       "Jitsi",
+			"override_icon_url":       "/plugins/jitsi/public/jitsi_logo.png",
+		},
+	}
+
+	var err *model.AppError
+
+	if _, err = p.API.CreatePost(post); err != nil {
+		p.API.LogInfo("Unable to post to channel")
+		return
+	}
+
 }
